@@ -13,9 +13,15 @@ class RenderData {
     var chunkTriangles = 0
     var chunkBuffers = 0
 
+    var lastTexture: String? = null
+    var renderLines = false
+
     fun clearStats() {
         chunkTriangles = 0
         chunkBuffers = 0
     }
+
+    val delta = Vector3d()
+    val centerDelta = Vector3d()
 
 }

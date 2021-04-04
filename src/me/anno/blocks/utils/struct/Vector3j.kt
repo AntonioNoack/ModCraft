@@ -20,6 +20,13 @@ class Vector3j(val x: Int, val y: Int, val z: Int) {
         return (x.hashCode() + y.hashCode() * 31) * 31 + z.hashCode()
     }
 
+    fun set(dst: Vector3d): Vector3d {
+        dst.x = x.toDouble()
+        dst.y = y.toDouble()
+        dst.z = z.toDouble()
+        return dst
+    }
+
     fun mutable() = Vector3i(x, y, z)
     fun mutableFloat() = Vector3f(x.toFloat(), y.toFloat(), z.toFloat())
     fun mutableDouble() = Vector3d(x.toDouble(), y.toDouble(), z.toDouble())

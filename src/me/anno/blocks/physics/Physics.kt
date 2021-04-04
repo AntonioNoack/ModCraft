@@ -7,12 +7,15 @@ import me.anno.blocks.entity.Entity
 import me.anno.blocks.utils.floorToInt
 import me.anno.blocks.world.Dimension
 import me.anno.utils.Maths.clamp
-import me.anno.utils.Maths.fract
+import me.anno.utils.types.Floats.f3
 import me.anno.utils.types.Lists.sumByFloat
+import org.apache.logging.log4j.LogManager
 import org.joml.*
 import kotlin.math.floor
 
 object Physics {
+
+    private val LOGGER = LogManager.getLogger(Physics::class)
 
     val gravity = -9.81f
 
@@ -20,31 +23,41 @@ object Physics {
 
     val frictionMultiplier = 5f
 
+    // test raytracing
+    @JvmStatic
+    fun main(args: Array<String>) {
+        raytrace(
+            Vector3d(-10.0), Vector3f(1f), 20f,
+            false, true, null, true
+        ) { _, _, _ ->
+            Air
+        }
+        LOGGER.info("---")
+        raytrace(
+            Vector3d(10.0), Vector3f(-1f), 20f,
+            false, true, null, true
+        ) { _, _, _ -> Air }
+    }
+
     fun raytrace(
-        dimension: Dimension,
         origin: Vector3d,
         direction: Vector3f,
-        maxDistance: Double,
+        maxDistance: Float,
+        hasBlocksBelowZero: Boolean,
         canHitFluids: Boolean,
-        canHitEntities: Boolean,
-        finished: Boolean
+        entities: List<Entity>?,
+        debug: Boolean = false,
+        getBlock: (x: Int, y: Int, z: Int) -> BlockState
     ): RaycastHit? {
 
         direction.normalize()
 
-        var bestDistance = maxDistance
+        var bestDistance = maxDistance.toDouble()
         var hitEntity: Entity? = null
-        if (canHitEntities) {
+        if (entities != null) {
             // todo get all chunks in distance... or sorted?...
 
         }
-
-        fun set(dst: Vector3i, src: Vector3d) {
-            dst.set(floor(src.x).toInt(), floor(src.y).toInt(), floor(src.z).toInt())
-        }
-
-        val coordinates = Vector3i()
-        set(coordinates, origin)
 
         var distance = 0.0
 
@@ -54,25 +67,27 @@ object Physics {
         val previousPosition = origin.floorToInt()
         var previousBlock = Air
 
-        fun checkHitExact(c: Vector3i, blockState: BlockState): RaycastHit {
+        fun checkHitExact(blockState: BlockState): RaycastHit {
             // todo check collision with collision mesh???...
             // println("hit $blockState at $c")
             position.set(direction).mul(distance).add(origin)
             return BlockHit(distance, position, previousPosition, previousBlock, positionI, blockState)
         }
 
+        val minY = if (hasBlocksBelowZero) Int.MIN_VALUE else 0
+
         fun checkHit(c: Vector3i): RaycastHit? {
-            val block = dimension.getBlock(c.x, c.y, c.z, finished)
+            if(debug) LOGGER.debug("Checking ${c.x} ${c.y} ${c.z}")
+            val block = getBlock(c.x, c.y, c.z)
             val result = if (block != Air) {
-                val visuals = block.block.visuals
                 val physics = block.block.physical
                 when (physics.type) {
                     PhysicsType.SOLID -> {
-                        checkHitExact(c, block)
+                        checkHitExact(block)
                     }
                     PhysicsType.FLUID -> {
                         if (canHitFluids) {
-                            checkHitExact(c, block)
+                            checkHitExact(block)
                         } else null
                     }
                     PhysicsType.AIR -> {
@@ -80,67 +95,78 @@ object Physics {
                         null
                     }
                     PhysicsType.FRICTION -> {
-                        checkHitExact(c, block)
+                        checkHitExact(block)
                     }
+                    else -> throw NotImplementedError()
                 }
             } else null
             if (result == null) previousBlock = block
             return result
         }
 
-        checkHit(coordinates)
 
-        val minY = if (dimension.hasBlocksBelowZero) Int.MIN_VALUE else 0
-
-        val lastHit = Vector3i(Int.MIN_VALUE)
 
         // acceptable inaccuracy
         val epsilon = 1e-4f
         val maxSteps = 1000
         var steps = 0
-        while (steps++ < maxSteps && distance < bestDistance) {
 
-            // increase the coordinates until we read the next block
+        val dx = if (direction.x > 0f) +1 else -1
+        val dy = if (direction.y > 0f) +1 else -1
+        val dz = if (direction.z > 0f) +1 else -1
+
+        val dirX = direction.x
+        val dirY = direction.y
+        val dirZ = direction.z
+
+        // extend the line to the world
+        if (!hasBlocksBelowZero && origin.y < minY && direction.y > 0f) {
+            val minLength = (minY - origin.y) / direction.y
+            distance = minLength
             position.set(direction).mul(distance).add(origin)
-
+            positionI.set(floor(position.x).toInt(), minY, floor(position.z).toInt())
+            if(debug) LOGGER.debug("Jumped to $distance")
+        } else {
+            position.set(origin)
             positionI.x = floor(position.x).toInt()
             positionI.y = floor(position.y).toInt()
             positionI.z = floor(position.z).toInt()
+            if(debug) LOGGER.debug("Set start position")
+        }
 
-            if (positionI.y >= minY && lastHit != positionI) {
-                lastHit.set(positionI)
-                val hit = checkHit(positionI)
-                if (hit != null) return hit
-                else previousPosition.set(positionI)
+        while (steps++ < maxSteps) {
+
+            if(!hasBlocksBelowZero && positionI.y < minY){
+                break
             }
 
-            var minLength = Double.POSITIVE_INFINITY
+            // increase the coordinates until we read the next block
+            val hit = checkHit(positionI)
+            if (hit != null) return hit
+            else previousPosition.set(positionI)
 
-            // extend the line to the world
-            if (position.y < minY) {
-                minLength = StrictMath.min(minLength, ((minY + epsilon) - position.y) / direction.y)
-                if (minLength.isFinite() && minLength > 0f) {
-                    distance += minLength + epsilon
-                    continue
-                }
+            val fractX = position.x - positionI.x
+            val fractY = position.y - positionI.y
+            val fractZ = position.z - positionI.z
+
+            // we need to go forward
+            // from origin to next wall
+            val sx = (if (dirX > 0f) 1f - fractX else -fractX) / dirX
+            val sy = (if (dirY > 0f) 1f - fractY else -fractY) / dirY
+            val sz = (if (dirZ > 0f) 1f - fractZ else -fractZ) / dirZ
+
+            if(debug) LOGGER.debug("${sx.f3()} ${sy.f3()} ${sz.f3()}")
+
+            distance = StrictMath.min(sx, StrictMath.min(sy, sz))
+            if(distance >= bestDistance) break
+
+            when(distance){
+                sx -> positionI.x += dx
+                sy -> positionI.y += dy
+                sz -> positionI.z += dz
             }
 
-            // we need to go forward...
-            val fractX = fract(origin.x)
-            val fractY = fract(origin.y)
-            val fractZ = fract(origin.z)
-
-            val minStep = StrictMath.max(
-                StrictMath.min(
-                    StrictMath.min(
-                        (if (direction.x > 0f) 1f - fractX else -fractX) / direction.x,
-                        (if (direction.y > 0f) 1f - fractY else -fractY) / direction.y
-                    ),
-                    (if (direction.z > 0f) 1f - fractZ else -fractZ) / direction.z
-                ), 0.0
-            ) + epsilon // epsilon, so we land in the next block, not this one again
-
-            distance += minStep
+            if(debug) LOGGER.debug("$distance: $position")
 
         }
 

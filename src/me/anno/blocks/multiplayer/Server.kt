@@ -49,7 +49,7 @@ class Server(val port: Int = defaultPort) {
                 val input = DataInputStream(socket.getInputStream())
                 val output = DataOutputStream(socket.getOutputStream())
                 val client = ServerSideClient(socket, input, output, defaultDimension)
-                thread {
+                thread(name = "ReadFromClient") {
                     try {
                         handshake(client)
                         addPlayer(client)

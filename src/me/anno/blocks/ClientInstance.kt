@@ -59,8 +59,6 @@ class ClientInstance(var playerName: String = "Hans") : StudioBase(
 
     }
 
-    // todo open window and such...
-
     var server: Server? = null
 
     fun tryStartServer() {

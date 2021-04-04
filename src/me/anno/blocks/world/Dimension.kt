@@ -14,7 +14,6 @@ import me.anno.blocks.rendering.RenderPass
 import me.anno.blocks.rendering.ShaderLib2.skyShader
 import me.anno.blocks.utils.floorToJnt
 import me.anno.blocks.utils.struct.Vector3j
-import me.anno.blocks.world.ChunksByDistance.chunksByDistance
 import me.anno.blocks.world.generator.Generator
 import me.anno.gpu.GFX
 import me.anno.gpu.shader.Shader
@@ -25,7 +24,10 @@ import me.anno.utils.LOGGER
 import me.anno.utils.Maths.sq
 import me.anno.utils.Sleep.sleepShortly
 import me.anno.utils.types.Vectors.toVec3f
-import org.joml.*
+import org.joml.AABBd
+import org.joml.Vector3d
+import org.joml.Vector3f
+import org.joml.Vector3i
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.concurrent.thread
 import kotlin.math.*
@@ -45,8 +47,6 @@ class Dimension(val world: World, val id: String, val generator: Generator) {
     private fun getOrPut(coordinates: Vector3j, callback: (Chunk) -> Unit): Chunk {
         return synchronized(chunks) {
             chunks.getOrPut(coordinates) {
-                if (coordinates in requestedChunks) throw RuntimeException()
-                requestedChunks.add(coordinates)
                 Chunk(this, coordinates).apply(callback)
             }
         }
@@ -148,29 +148,39 @@ class Dimension(val world: World, val id: String, val generator: Generator) {
     fun getChunkAtMaybe(c: Vector3i, finished: Boolean) =
         getChunkMaybe(Vector3j(c.x shr CSBits, c.y shr CSBits, c.z shr CSBits), finished)
 
-    fun setBlock(coordinates: Vector3i, finished: Boolean, block: BlockState) {
-        getChunkAt(coordinates, finished)?.setBlock(coordinates, block)
+    fun setBlock(position: Vector3i, finished: Boolean, block: BlockState) {
+        setBlock(position.x, position.y, position.z, finished, block)
     }
 
-    fun setBlock(coordinates: Vector3j, finished: Boolean, block: BlockState) {
-        getChunkAt(coordinates, finished)?.setBlock(coordinates, block)
+    fun setBlock(position: Vector3j, finished: Boolean, block: BlockState) {
+        setBlock(position.x, position.y, position.z, finished, block)
     }
 
     fun setBlock(x: Int, y: Int, z: Int, finished: Boolean, block: BlockState) {
-        getChunkAt(x, y, z, finished)?.setBlock(x, y, z, block)
+        val chunk = getChunkAt(x, y, z, finished) ?: return
+        if (finished) {
+            val xMask = x.and(CSm1)
+            val yMask = y.and(CSm1)
+            val zMask = z.and(CSm1)
+            // update neighbor chunks
+            if (xMask == 0) getChunkAtMaybe(x - 1, y, z, false)?.invalidate()
+            if (yMask == 0) getChunkAtMaybe(x, y - 1, z, false)?.invalidate()
+            if (zMask == 0) getChunkAtMaybe(x, y, z - 1, false)?.invalidate()
+            if (xMask == CSm1) getChunkAtMaybe(x + 1, y, z, false)?.invalidate()
+            if (yMask == CSm1) getChunkAtMaybe(x, y + 1, z, false)?.invalidate()
+            if (zMask == CSm1) getChunkAtMaybe(x, y, z + 1, false)?.invalidate()
+        }
+        chunk.setBlock(x, y, z, block)
     }
 
     val sunDir = Vector3f(0.4f, -0.7f, 0.2f).normalize()
     val sunLight = Vector3f(0.5f)
     val baseLight = Vector3f(0.2f + 0.5f)
 
-    val chunkList = arrayOfNulls<Chunk>(chunksByDistance.size)
-
+    val chunksByDistance = ChunksByDistance(5)
     val centerChunkCoordinates = Vector3i()
 
     fun prepareChunks(data: RenderData, player: Player) {
-
-        var index = 0
 
         val position = player.position
         val centerChunkCoordinates = centerChunkCoordinates
@@ -182,10 +192,15 @@ class Dimension(val world: World, val id: String, val generator: Generator) {
 
         var updates = 1
         val time = GFX.gameTime
-        for (delta in chunksByDistance) {
+
+        chunksByDistance.update(centerChunkCoordinates)
+        chunksByDistance.resetForRendering()
+
+        for ((index, delta) in chunksByDistance.values.withIndex()) {
             chunkCoordinates.set(centerChunkCoordinates).add(delta)
             if (hasBlocksBelowZero || chunkCoordinates.y >= 0) {
-                var chunk = synchronized(chunks) { chunks[Vector3j(chunkCoordinates)] }
+                var chunk: Chunk? = chunksByDistance.getChunk(index)
+                if (chunk == null) chunk = synchronized(chunks) { chunks[Vector3j(chunkCoordinates)] }
                 if (chunk == null) {
                     updates--
                     if (updates >= 0) {
@@ -193,15 +208,14 @@ class Dimension(val world: World, val id: String, val generator: Generator) {
                     }
                 }
                 if (chunk != null) {
+                    chunksByDistance.setChunk(index, chunk)
                     chunk.lastRendered = time
                     if (chunk.shouldBeDrawn(data)) {
-                        chunkList[index++] = chunk
+                        chunksByDistance.pushForRendering(chunk)
                     }
                 }
             }
         }
-
-        if (index < chunkList.size) chunkList[index] = null
 
     }
 
@@ -246,8 +260,6 @@ class Dimension(val world: World, val id: String, val generator: Generator) {
 
     }
 
-    val requestedChunks = HashSet<Vector3j>()
-
     /**
      * unload all chunks, where we no longer are
      * */
@@ -255,7 +267,7 @@ class Dimension(val world: World, val id: String, val generator: Generator) {
         val time = GFX.gameTime
         val seconds = 1_000_000_000L
         val timeout = 5 * seconds
-        val maxDistance: Double = CS * (ChunksByDistance.maxDistance + 3) * sqrt(3.0)
+        val maxDistance: Double = CS * (chunksByDistance.maxDistance + 3) * sqrt(3.0)
         val maxDistanceSq: Double = sq(maxDistance)
         synchronized(chunks) {
             val shallBeRemoved = chunks.values.filter { chunk ->
@@ -267,7 +279,6 @@ class Dimension(val world: World, val id: String, val generator: Generator) {
             }
             shallBeRemoved.forEach { chunk ->
                 LOGGER.info("Destroyed ${chunk.coordinates}")
-                requestedChunks.remove(chunk.coordinates)
                 chunk.destroy()
             }
         }
@@ -300,25 +311,33 @@ class Dimension(val world: World, val id: String, val generator: Generator) {
      * */
     fun draw(data: RenderData, pass: RenderPass) {
 
+        GFX.check()
+
         val shader = pass.shader
         shader.use()
 
-        for (chunk in chunkList) {
-            if (chunk == null) break
+        GFX.check()
+
+        data.lastTexture = null
+
+        GFX.check()
+
+        for (index in 0 until chunksByDistance.renderingIndex) {
+            val chunk = chunksByDistance.getChunkForRendering(index)
             chunk.draw(data, pass)
         }
 
+        GFX.check()
+
     }
 
+    private val requestSlots = AtomicInteger(16)
     fun requestSlot() {
         while (requestSlots.getAndDecrement() <= 0) {
             requestSlots.incrementAndGet()
             Thread.sleep(1)
         }
     }
-
-    val requestSlots = AtomicInteger(16)
-
     fun unlockRequestSlot() {
         requestSlots.incrementAndGet()
     }

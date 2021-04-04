@@ -22,13 +22,12 @@ import me.anno.blocks.utils.add
 import me.anno.blocks.utils.struct.Vector3j
 import me.anno.blocks.world.Dimension
 import me.anno.cache.instances.ImageCache
+import me.anno.gpu.GFX
 import me.anno.gpu.GFX.checkIsGFXThread
 import me.anno.gpu.TextureLib.whiteTexture
 import me.anno.gpu.buffer.DrawLinesBuffer.drawLines
-import me.anno.gpu.buffer.StaticBuffer
 import me.anno.gpu.texture.Clamping
 import me.anno.gpu.texture.GPUFiltering
-import me.anno.input.Input
 import me.anno.utils.Clipping
 import org.joml.*
 import kotlin.concurrent.thread
@@ -61,10 +60,10 @@ class Chunk(val dimension: Dimension, val coordinates: Vector3j) {
     fun getAllBlocks() = content.getAllBlocks()
 
     fun getBlockState(index: Int) = content.getBlockState(index)
+    fun getBlockState(coordinates: Vector3i): BlockState = content.getBlockState(getIndex(coordinates))
+    fun getBlockState(coordinates: Vector3j): BlockState = content.getBlockState(getIndex(coordinates))
+    fun getBlockState(x: Int, y: Int, z: Int): BlockState = getBlockState(getIndex(x, y, z))
 
-    fun getBlockState(x: Int, y: Int, z: Int): BlockState {
-        return getBlockState(getIndex(x, y, z))
-    }
 
     fun getBlockInfo(index: Int): BlockInfo {
         val world = dimension.world
@@ -178,6 +177,8 @@ class Chunk(val dimension: Dimension, val coordinates: Vector3j) {
             wasChanged = false
         }
 
+        GFX.check()
+
         // drawDebugCube(data, center)
 
         val materialType = pass.materialType
@@ -186,14 +187,20 @@ class Chunk(val dimension: Dimension, val coordinates: Vector3j) {
         val shader = pass.shader
         shader.use()
 
+        GFX.check()
+
         matrix.pushMatrix()
 
-        val delta = Vector3d(coordinates.mutable()).mul(CS.toDouble()).sub(data.cameraPosition)
-        val centerDelta = Vector3d(center).sub(data.cameraPosition)
+        val delta = coordinates.set(data.delta).mul(CS.toDouble()).sub(data.cameraPosition)
+        val centerDelta = data.centerDelta.set(center).sub(data.cameraPosition)
         matrix.translate(delta.x.toFloat(), delta.y.toFloat(), delta.z.toFloat())
+
+        GFX.check()
 
         shader.m4x4("matrix", matrix)
         shader.v3("camPosition", delta.x.toFloat(), delta.y.toFloat(), delta.z.toFloat())
+
+        GFX.check()
 
         for (side in BlockSide.values2) {
             val sideId = side.id
@@ -205,21 +212,39 @@ class Chunk(val dimension: Dimension, val coordinates: Vector3j) {
             val index = baseId + sideId
             if (!hasValidMesh[index]) createMesh(side, materialType, index)
             val meshInfo = meshes[index]
-            if(meshInfo != null){
-                for(i in 0 until meshInfo.length){
+            if (meshInfo != null) {
+                for (i in 0 until meshInfo.length) {
                     val path = meshInfo.getPath(i)
                     val buffer = meshInfo.getBuffer(i)
-                    val texture = ImageCache.getInternalTexture(path, true) ?: whiteTexture
-                    texture.bind(GPUFiltering.TRULY_NEAREST, Clamping.CLAMP)
-                    if (Input.isKeyDown('l')) {
+                    if (path != data.lastTexture) {
+
+                        GFX.check()
+
+                        val texture = ImageCache.getInternalTexture(path, true) ?: whiteTexture
+                        texture.bind(GPUFiltering.TRULY_NEAREST, Clamping.CLAMP)
+                        data.lastTexture = path
+
+                    }
+
+                    GFX.check()
+
+                    if (data.renderLines) {
                         buffer.bind(shader)
                         drawLines(buffer.drawLength)
-                    } else buffer.draw(shader)
+                        GFX.check()
+                    } else {
+                        buffer.draw(shader)
+                        GFX.check()
+                    }
+
+
                     data.chunkTriangles += buffer.drawLength
                     data.chunkBuffers++
                 }
             }
         }
+
+        GFX.check()
 
         matrix.popMatrix()
 

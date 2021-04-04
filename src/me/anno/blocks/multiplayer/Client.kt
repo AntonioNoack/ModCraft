@@ -45,7 +45,7 @@ class Client(
 
     fun start(async: Boolean) {
         if (async) {
-            thread { start(false) }
+            thread(name = "Client"){ start(false) }
             return
         }
         socket = Socket(ip, port)

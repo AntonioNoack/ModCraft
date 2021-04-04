@@ -18,6 +18,7 @@ import me.anno.blocks.chunk.mesh.MeshInfo
 import me.anno.blocks.rendering.BlockBuffer
 import me.anno.blocks.rendering.ShaderLib2
 import me.anno.gpu.buffer.StaticBuffer
+import me.anno.utils.LOGGER
 import org.joml.Matrix4x3f
 import org.joml.Vector4f
 
@@ -135,7 +136,9 @@ object BakeMesh {
                         }
                     }
                 }
-                meshes2[path] = buffer
+                if(buffer.nioBuffer!!.position() > 0){
+                    meshes2[path] = buffer
+                } else LOGGER.warn("Though I'd need a mesh, but I didn't -> wrong vertex count")
             }
         }
 
