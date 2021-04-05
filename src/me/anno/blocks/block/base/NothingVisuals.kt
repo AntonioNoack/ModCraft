@@ -4,7 +4,7 @@ import me.anno.blocks.block.BlockSide
 import me.anno.blocks.block.visual.BlockVisuals
 import me.anno.blocks.block.visual.MaterialType
 import me.anno.blocks.block.visual.TextureCoordinates
-import me.anno.blocks.rendering.BlockBuffer
+import me.anno.blocks.chunk.mesh.BlockBuffer
 
 object NothingVisuals: BlockVisuals(MaterialType.TRANSPARENT_MASS, false, null) {
 

@@ -28,7 +28,8 @@ class BlockRegistry {
         register(GrassBlock)
         register(StoneBlock)
         register(WaterBlock)
-        // register(ErrorBlock)
+        register(LeavesBlock)
+        register(ErrorBlock)
     }
 
 }

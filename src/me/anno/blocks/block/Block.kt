@@ -5,6 +5,9 @@ import me.anno.blocks.block.logical.BlockLogic
 import me.anno.blocks.block.physical.BlockPhysical
 import me.anno.blocks.block.visual.BlockVisuals
 import me.anno.blocks.block.visual.MaterialType
+import me.anno.blocks.rendering.RenderData
+import me.anno.blocks.rendering.RenderPass
+import me.anno.blocks.rendering.SolidShader
 
 class Block(
     val logic: BlockLogic,
@@ -22,5 +25,13 @@ class Block(
     }
 
     val isSolid = visuals.materialType == MaterialType.SOLID_BLOCK
+
+    val isLightSolid = logic.isLightSolid
+    val isLight = logic.isLight
+    val lightState = logic.lightState
+
+    fun draw(data: RenderData, shader: SolidShader){
+        visuals.draw(data, shader)
+    }
 
 }

@@ -1,9 +1,12 @@
-package me.anno.blocks.rendering
+package me.anno.blocks.chunk.mesh
 
 import me.anno.blocks.block.BlockSide
+import me.anno.blocks.chunk.lighting.BakeLight
 import me.anno.blocks.utils.cross
 import me.anno.blocks.utils.normalize
+import me.anno.blocks.utils.struct.Vector3j
 import me.anno.gpu.buffer.StaticBuffer
+import me.anno.utils.Maths.fract
 import org.apache.logging.log4j.LogManager
 import org.joml.*
 
@@ -13,9 +16,95 @@ class BlockBuffer(
     val xyzTransform: Matrix4x3fc,
     val uv0: Vector2fc,
     val uv1: Vector2fc,
-    val getLight: (Vector3f) -> Vector4f
+    val fetchLight: (x: Int, y: Int, z: Int) -> Short
 
 ) {
+
+    val lightCache = HashMap<Vector3j, Short>()
+    fun getLight(x: Int, y: Int, z: Int): Short {
+        return lightCache.getOrPut(Vector3j(x, y, z)) { fetchLight(x, y, z) }
+    }
+
+    val light = Vector4f()
+
+    fun getLight(v: Vector3f): Vector4f {
+        return getLight2(v.x + 0.5f, v.y + 0.5f, v.z + 0.5f)
+    }
+
+    fun getLight(x: Float, y: Float, z: Float): Vector4f {
+        return getLight2(x + 0.5f, y + 0.5f, z + 0.5f)
+    }
+
+    val i = IntArray(8)
+
+    fun mix(a: Float, b: Float, f: Float): Float {
+        return (1 - f) * a + f * b
+    }
+
+    fun get(shr: Int, offset: Int): Float {
+        return i[offset].shr(shr).and(15) / 15f
+    }
+
+    fun getX(shr: Int, xFract: Float, offset: Int): Float {
+        return mix(
+            get(shr, offset),
+            get(shr, offset + 1),
+            xFract
+        )
+    }
+
+    fun getXY(shr: Int, xFract: Float, yFract: Float, offset: Int): Float {
+        return mix(
+            getX(shr, xFract, offset),
+            getX(shr, xFract, offset + 2),
+            yFract
+        )
+    }
+
+    fun getXYZ(shr: Int, xFract: Float, yFract: Float, zFract: Float): Float {
+        return mix(
+            getXY(shr, xFract, yFract, 0),
+            getXY(shr, xFract, yFract, 4),
+            zFract
+        )
+    }
+
+    fun getLight2(x: Float, y: Float, z: Float): Vector4f {
+        // todo x,y,z are incorrect by 0.5
+        val xFract = fract(x)
+        val yFract = fract(y)
+        val zFract = fract(z)
+        val light = light
+        val xi = x.toInt()
+        val yi = y.toInt()
+        val zi = z.toInt()
+        if (xFract < 0.01f && yFract < 0.01f && zFract < 0.01f) {
+            // only fetch one
+            val value = getLight(xi, yi, zi).toInt()
+            light.set(
+                value.shr(12).and(15) / 15f,
+                value.shr(8).and(15) / 15f,
+                value.shr(4).and(15) / 15f,
+                value.and(15) / 15f
+            )
+        } else {
+            i[0] = getLight(xi, yi, zi).toInt()
+            i[1] = getLight(xi + 1, yi, zi).toInt()
+            i[2] = getLight(xi, yi + 1, zi).toInt()
+            i[3] = getLight(xi + 1, yi + 1, zi).toInt()
+            i[4] = getLight(xi, yi, zi + 1).toInt()
+            i[5] = getLight(xi + 1, yi, zi + 1).toInt()
+            i[6] = getLight(xi, yi + 1, zi + 1).toInt()
+            i[7] = getLight(xi + 1, yi + 1, zi + 1).toInt()
+            light.set(
+                getXYZ(12, xFract, yFract, zFract),
+                getXYZ(8, xFract, yFract, zFract),
+                getXYZ(4, xFract, yFract, zFract),
+                getXYZ(0, xFract, yFract, zFract)
+            )
+        }
+        return light
+    }
 
     fun addTriangle(
         a: Vector3fc, b: Vector3fc, c: Vector3fc,
@@ -77,7 +166,11 @@ class BlockBuffer(
         base.put(uv)
         base.put(uv0)
         base.put(uv1)
-        base.put(getLight(transformed))
+        if(BakeLight.EnableLighting){
+            base.put(getLight(transformed))
+        } else {
+            base.put(0f, 0f, 0f, 1f)
+        }
     }
 
     private fun addPoint(
@@ -91,7 +184,11 @@ class BlockBuffer(
         base.put(uv.x().toFloat(), uv.y().toFloat())
         base.put(uv0)
         base.put(uv1)
-        base.put(getLight(transformed))
+        if(BakeLight.EnableLighting){
+            base.put(getLight(transformed))
+        } else {
+            base.put(0f, 0f, 0f, 1f)
+        }
     }
 
     fun addQuad(

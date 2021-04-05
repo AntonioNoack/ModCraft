@@ -11,8 +11,14 @@ import me.anno.blocks.chunk.Chunk.Companion.CS
 import me.anno.blocks.chunk.Chunk.Companion.CS2
 import me.anno.blocks.chunk.Chunk.Companion.CS2m1
 import me.anno.blocks.chunk.Chunk.Companion.CS3
+import me.anno.blocks.chunk.Chunk.Companion.CSm1
+import me.anno.blocks.chunk.Chunk.Companion.FIRST_SOLID
+import me.anno.blocks.chunk.Chunk.Companion.FIRST_TRANS
+import me.anno.blocks.chunk.Chunk.Companion.getIndex
 import me.anno.blocks.chunk.Chunk.Companion.getY
 import me.anno.blocks.chunk.Chunk.Companion.uAIR
+import me.anno.blocks.chunk.Chunk.Companion.uFIRST_SOLID
+import me.anno.blocks.chunk.Chunk.Companion.uFIRST_TRANS
 import me.anno.blocks.chunk.Chunk.Companion.uOTHER
 import me.anno.blocks.chunk.ChunkIO
 import me.anno.blocks.registry.BlockRegistry
@@ -30,12 +36,12 @@ class FullChunkContent : ChunkContent() {
 
     var extraBlocks: HashMap<Int, BlockState>? = null
 
-    var solidIndex = Chunk.FIRST_SOLID
-    var transIndex = Chunk.FIRST_TRANS
+    var solidIndex = FIRST_SOLID
+    var transIndex = FIRST_TRANS
 
     private fun clearRegistry() {
-        solidIndex = Chunk.FIRST_SOLID
-        transIndex = Chunk.FIRST_TRANS
+        solidIndex = FIRST_SOLID
+        transIndex = FIRST_TRANS
         blockStateIds.clear()
         extraBlocks = null
     }
@@ -57,7 +63,8 @@ class FullChunkContent : ChunkContent() {
             bestSolid.forEach { register(it.first) }
             bestTrans.forEach { register(it.first) }
             blocks.fill(uAIR)
-            for ((index, block) in blockStates.withIndex()) {
+            for (index in blockStates.indices) {
+                val block = blockStates[index]
                 if (block !== Air) {
                     setBlock(index, block)
                 }
@@ -176,7 +183,7 @@ class FullChunkContent : ChunkContent() {
         }
 
         if (newStateId == uOTHER) {
-            if(extraBlocks == null) extraBlocks = HashMap()
+            if (extraBlocks == null) extraBlocks = HashMap()
             extraBlocks!![index] = newState
         }
 
@@ -226,7 +233,7 @@ class FullChunkContent : ChunkContent() {
     override fun getAllBlockTypes(): List<BlockState> {
         val list0 = blockStateIds.keys.toList()
         val list1 = extraBlocks?.values?.toList()
-        return if(list1 == null) list0 else list0 + list1
+        return if (list1 == null) list0 else list0 + list1
     }
 
     override fun readInternally(input: DataInputStream, registry: BlockRegistry): ChunkContent {
@@ -237,6 +244,42 @@ class FullChunkContent : ChunkContent() {
     override fun writeInternally(output: DataOutputStream) {
         ChunkIO.write(this, output)
         wasChanged = true
+    }
+
+    override fun isCompletelySolid(): Boolean {
+        val start = uFIRST_SOLID
+        val end = uFIRST_TRANS
+        for (block in blocks) {
+            if (block !in start until end) {
+                return false
+            }
+        }
+        return true
+    }
+
+    override fun isClosedSolid(): Boolean {
+        val start = FIRST_SOLID.toUByte()
+        val end = FIRST_TRANS.toUByte()
+        val topIndex = getIndex(0, CSm1, 0)
+        for (i in 0 until CS2) if (blocks[i] !in start until end) return false
+        for (i in topIndex until CS2 + topIndex) if (blocks[i] !in start until end) return false
+        // check sides
+        for (i in 1 until CSm1) {
+            for (j in 1 until CSm1) {
+                if (blocks[getIndex(i, j, 0)] !in start until end) return false
+                if (blocks[getIndex(i, j, CSm1)] !in start until end) return false
+                if (blocks[getIndex(0, j, i)] !in start until end) return false
+                if (blocks[getIndex(CSm1, j, i)] !in start until end) return false
+            }
+        }
+        return true
+    }
+
+    override fun containsLights(): Boolean {
+        for (i in FIRST_SOLID until solidIndex) if (blockStates[i]!!.isLight) return true
+        for (i in FIRST_TRANS until transIndex) if (blockStates[i]!!.isLight) return true
+        val extraBlocks = extraBlocks ?: return false
+        return extraBlocks.values.any { it.isLight }
     }
 
 }

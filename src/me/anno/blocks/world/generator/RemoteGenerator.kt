@@ -18,7 +18,6 @@ class RemoteGenerator(
 
         // println("generating stage $stage of ${chunk.coordinates}, ${chunk.isFinished}, ${Thread.currentThread().name}")
 
-        dimension.requestSlot()
         client.send(ChunkRequestPacket(chunk.coordinates, dimension.id))
 
         val maxSteps = 10000 // = 10s

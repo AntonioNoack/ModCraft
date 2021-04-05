@@ -113,13 +113,23 @@ object ChunkIO {
     }
 
     fun FullChunkContent.readExtraBlocks(input: DataInputStream, registry: BlockRegistry) {
-        extraBlocks = null
+        val index0 = input.readUnsignedShort()
+        if (index0 >= CS3){
+            extraBlocks = null
+            return
+        }
+        val block0 = input.readBlockState(registry)
+        extraBlocks?.clear()
+        if(extraBlocks == null){
+            extraBlocks = HashMap()
+        }
+        val extraBlocks = extraBlocks!!
+        extraBlocks[index0] = block0
         while (true) {
             val index = input.readUnsignedShort()
             if (index >= CS3) break
             val block = input.readBlockState(registry)
-            if(extraBlocks == null) extraBlocks = HashMap()
-            extraBlocks!![index] = block
+            extraBlocks[index] = block
         }
     }
 

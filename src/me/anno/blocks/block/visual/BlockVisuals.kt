@@ -1,7 +1,8 @@
 package me.anno.blocks.block.visual
 
 import me.anno.blocks.block.BlockSide
-import me.anno.blocks.rendering.BlockBuffer
+import me.anno.blocks.chunk.mesh.BlockBuffer
+import me.anno.blocks.rendering.*
 import java.lang.IllegalArgumentException
 
 abstract class BlockVisuals(
@@ -9,6 +10,8 @@ abstract class BlockVisuals(
     val supportsRepetitions: Boolean,
     val texturesBySide: Array<Texture?>?
 ) {
+
+    val previewModel = lazy { PreviewModel(this) }
 
     fun checkTextures(){
         if(texturesBySide != null && texturesBySide.size >= 6){
@@ -19,6 +22,10 @@ abstract class BlockVisuals(
                 }
             }
         }
+    }
+
+    fun draw(data: RenderData, shader: SolidShader){
+        previewModel.value.draw(data, shader)
     }
 
     abstract fun createMesh(

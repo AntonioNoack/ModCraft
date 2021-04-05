@@ -31,8 +31,8 @@ import me.anno.gpu.GFX
 import me.anno.objects.distributions.CuboidHullDistribution
 import me.anno.objects.distributions.SphereHullDistribution
 import me.anno.utils.Maths.next
-import me.anno.utils.types.Vectors.plus
 import me.anno.utils.types.Vectors.minus
+import me.anno.utils.types.Vectors.plus
 import org.joml.*
 import javax.vecmath.Vector3f
 import kotlin.math.abs
@@ -66,7 +66,8 @@ class BulletWorld {
         val v111 = getShape(1, 1, 1)
         val simplestShapes = IntArray(CS3)
         val ids = chunk.getAllBlocks()
-        for ((index, id) in ids.withIndex()) {
+        for (index in ids.indices) {
+            val id = ids[index]
             if (id != Air) {
                 val block = id.block
                 val shapes = block.physical.collisionShapes
@@ -92,7 +93,8 @@ class BulletWorld {
             }
         }
         simplifyShapes(simplestShapes)
-        for ((index, blockSizeI) in simplestShapes.withIndex()) {
+        for (index in simplestShapes.indices) {
+            val blockSizeI = simplestShapes[index]
             if (blockSizeI != 0) {
                 val blockSize = shapeToVec(blockSizeI)
                 val position = getVec3f(index)

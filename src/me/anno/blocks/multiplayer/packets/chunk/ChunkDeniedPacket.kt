@@ -31,7 +31,6 @@ class ChunkDeniedPacket(var dimension: String, val coordinates: Vector3i) :
 
     override fun onClient(client: Client) {
         val dimension = client.world.getDimension(dimension) ?: return
-        dimension.unlockRequestSlot()
         val chunk = dimension.getChunk(coordinates, false) ?: return
         chunk.fill(Stone)
         chunk.finish()

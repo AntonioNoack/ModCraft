@@ -3,10 +3,13 @@ package me.anno.blocks.rendering
 import org.joml.Matrix4f
 import org.joml.Matrix4fArrayList
 import org.joml.Vector3d
+import org.joml.Vector3f
 
 class RenderData {
 
     val cameraPosition = Vector3d()
+    val cameraRotation = Vector3f()
+
     val matrix = Matrix4fArrayList()
     val inverse = Matrix4f()
 

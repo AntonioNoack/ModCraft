@@ -25,9 +25,10 @@ class PerlinGenerator(val topLayers: Array<BlockState>, val bottomLayers: BlockS
                     for (x in 0 until CS) {
                         for (z in 0 until CS) {
                             val noise = noise.eval((x + chunk.center.x()) * 0.01, (z + chunk.center.z()) * 0.01)
+                            val h0 = (20f * noise + 20f).toInt()
                             val height = (64f * noise + 64f).toInt()
                             val y2 = height - topLayers.size
-                            for (y in yMin until StrictMath.min(yMax, y2)) {
+                            for (y in StrictMath.max(yMin, h0) until StrictMath.min(yMax, y2)) {
                                 chunk.setBlock(x, y, z, bottomLayers)
                             }
                             for (y in StrictMath.max(yMin, y2) until StrictMath.min(yMax, height)) {

@@ -8,8 +8,10 @@ import me.anno.blocks.block.base.Air
 import me.anno.blocks.block.base.AirBlock
 import me.anno.blocks.block.visual.MaterialType
 import me.anno.blocks.block.visual.MaterialType.Companion.MaterialTypeCount
-import me.anno.blocks.chunk.BakeMesh.bakeMesh
-import me.anno.blocks.chunk.BakeMesh.hasStatesOnSide
+import me.anno.blocks.chunk.mesh.BakeMesh.bakeMesh
+import me.anno.blocks.chunk.mesh.BakeMesh.hasStatesOnSide
+import me.anno.blocks.chunk.lighting.BakeLight
+import me.anno.blocks.chunk.lighting.LightInfo
 import me.anno.blocks.chunk.mesh.MeshInfo
 import me.anno.blocks.chunk.ramless.ChunkContent
 import me.anno.blocks.chunk.ramless.SimplestChunkContent
@@ -18,37 +20,40 @@ import me.anno.blocks.entity.ItemStackEntity
 import me.anno.blocks.item.ItemStack
 import me.anno.blocks.rendering.RenderData
 import me.anno.blocks.rendering.RenderPass
-import me.anno.blocks.utils.add
+import me.anno.blocks.rendering.SolidShader
 import me.anno.blocks.utils.struct.Vector3j
 import me.anno.blocks.world.Dimension
-import me.anno.cache.instances.ImageCache
 import me.anno.gpu.GFX
-import me.anno.gpu.GFX.checkIsGFXThread
-import me.anno.gpu.TextureLib.whiteTexture
 import me.anno.gpu.buffer.DrawLinesBuffer.drawLines
-import me.anno.gpu.texture.Clamping
-import me.anno.gpu.texture.GPUFiltering
-import me.anno.utils.Clipping
+import me.anno.utils.Maths.clamp
+import me.anno.utils.Maths.sq
+import org.apache.logging.log4j.LogManager
 import org.joml.*
 import kotlin.concurrent.thread
 
 class Chunk(val dimension: Dimension, val coordinates: Vector3j) {
 
-    val x0 = coordinates.x * CS
-    val x1 = x0 + CS
-    val y0 = coordinates.y * CS
-    val y1 = y0 + CS
-    val z0 = coordinates.z * CS
-    val z1 = z0 + CS
-
     val center: Vector3dc = coordinates.getBlockCenter().mul(CS.toDouble())
+    val innerCorner = Vector3j(coordinates.x * CS, coordinates.y * CS, coordinates.z * CS)
 
     var wasChanged = false
 
     var content: ChunkContent = SimplestChunkContent(Air)
+    var lightMap = LightInfo()
+
+    val culling = ChunkCulling(this)
 
     fun optimizeMaybe() {
         content = content.optimize()
+    }
+
+    fun calculateLightMap() {
+        if (lightMap.isValid) return
+        lightMap.isCalculating = true
+        BakeLight.calculateLightValues(dimension, coordinates, 1, lightMap)
+        lightMap.isValid = true
+        lightMap.isCalculating = false
+        // LOGGER.info("Calculated lightmap for $coordinates")
     }
 
     val isVisuallyAir: Boolean
@@ -64,6 +69,8 @@ class Chunk(val dimension: Dimension, val coordinates: Vector3j) {
     fun getBlockState(coordinates: Vector3j): BlockState = content.getBlockState(getIndex(coordinates))
     fun getBlockState(x: Int, y: Int, z: Int): BlockState = getBlockState(getIndex(x, y, z))
 
+    fun getLight(index: Int) = lightMap.getLightLevel(index)
+    fun getLight(x: Int, y: Int, z: Int) = getLight(getIndex(x, y, z))
 
     fun getBlockInfo(index: Int): BlockInfo {
         val world = dimension.world
@@ -124,19 +131,20 @@ class Chunk(val dimension: Dimension, val coordinates: Vector3j) {
         val allBlockStates = content.getAllBlockTypes()
         if (allBlockStates.any { it != Air && it.block.visuals.materialType == materialType }) {
             val blockStates = getAllBlocks()
-            thread {
+            thread(name = "CreateMesh $side $coordinates $materialType") {
+                // LOGGER.info("$side $coordinates $materialType")
                 var neighborChunk: Chunk? = null
                 // performance improvement: for 1331 chunks, 430k vs 550k -> 20% improvement :)
                 if (materialType == MaterialType.SOLID_BLOCK) {
-                    neighborChunk = dimension.getChunk(coordinates.mutable().add(side.normalI), true)
+                    neighborChunk = dimension.getChunk(coordinates + side.normalI, true)
                 }
                 // visual improvement and performance improvement
                 if (materialType == MaterialType.TRANSPARENT_MASS) {
                     if (hasStatesOnSide(blockStates, materialType, side)) {
-                        neighborChunk = dimension.getChunk(coordinates.mutable().add(side.normalI), true)
+                        neighborChunk = dimension.getChunk(coordinates + side.normalI, true)
                     }
                 }
-                meshes[index] = bakeMesh(side, neighborChunk, blockStates, materialType, meshes[index])
+                meshes[index] = bakeMesh(side, this, neighborChunk, blockStates, materialType, meshes[index])
             }
         } else {
             meshes[index] = null
@@ -152,7 +160,7 @@ class Chunk(val dimension: Dimension, val coordinates: Vector3j) {
         if (isVisuallyAir) return false
 
         val matrix = data.matrix
-        if (!isVisible(matrix, data.cameraPosition)) return false
+        if (!culling.isVisible(matrix, data.cameraPosition, data.cameraRotation)) return false
 
         if (!isFinished) return false
 
@@ -165,17 +173,8 @@ class Chunk(val dimension: Dimension, val coordinates: Vector3j) {
 
     }
 
+    var hasCorrectTransform = false
     fun draw(data: RenderData, pass: RenderPass) {
-
-        val matrix = data.matrix
-        if (!isVisible(matrix, data.cameraPosition)) return
-
-        if (!isFinished) return
-
-        if (wasChanged) {
-            invalidate()
-            wasChanged = false
-        }
 
         GFX.check()
 
@@ -187,76 +186,79 @@ class Chunk(val dimension: Dimension, val coordinates: Vector3j) {
         val shader = pass.shader
         shader.use()
 
-        GFX.check()
-
-        matrix.pushMatrix()
-
-        val delta = coordinates.set(data.delta).mul(CS.toDouble()).sub(data.cameraPosition)
-        val centerDelta = data.centerDelta.set(center).sub(data.cameraPosition)
-        matrix.translate(delta.x.toFloat(), delta.y.toFloat(), delta.z.toFloat())
-
-        GFX.check()
-
-        shader.m4x4("matrix", matrix)
-        shader.v3("camPosition", delta.x.toFloat(), delta.y.toFloat(), delta.z.toFloat())
-
-        GFX.check()
-
+        hasCorrectTransform = false
         for (side in BlockSide.values2) {
+
             val sideId = side.id
             // check which sides are needed of this chunk to save memory and calculation time
             // efficiency ~ 2x, more like 1.7x less triangles
-            if (side.normalD.dot(centerDelta) > CS * 0.5f) {
-                continue
+            if (culling.sideIsActive[sideId]) {
+
+                val index = baseId + sideId
+                if (!hasValidMesh[index]) createMesh(side, materialType, index)
+
+                val meshInfo = meshes[index]
+                if (meshInfo != null) drawMeshInfo(data, shader, meshInfo)
+
             }
-            val index = baseId + sideId
-            if (!hasValidMesh[index]) createMesh(side, materialType, index)
-            val meshInfo = meshes[index]
-            if (meshInfo != null) {
-                for (i in 0 until meshInfo.length) {
-                    val path = meshInfo.getPath(i)
-                    val buffer = meshInfo.getBuffer(i)
-                    if (path != data.lastTexture) {
 
-                        GFX.check()
-
-                        val texture = ImageCache.getInternalTexture(path, true) ?: whiteTexture
-                        texture.bind(GPUFiltering.TRULY_NEAREST, Clamping.CLAMP)
-                        data.lastTexture = path
-
-                    }
-
-                    GFX.check()
-
-                    if (data.renderLines) {
-                        buffer.bind(shader)
-                        drawLines(buffer.drawLength)
-                        GFX.check()
-                    } else {
-                        buffer.draw(shader)
-                        GFX.check()
-                    }
-
-
-                    data.chunkTriangles += buffer.drawLength
-                    data.chunkBuffers++
-                }
-            }
         }
 
         GFX.check()
 
-        matrix.popMatrix()
+    }
 
+    var startTime = 0L
+
+    fun getTimeAlive(): Float {
+        if(startTime == 0L) startTime = GFX.gameTime
+        return (GFX.gameTime - startTime) / 1e9f
+    }
+
+    fun drawMeshInfo(data: RenderData, shader: SolidShader, meshInfo: MeshInfo) {
+        var alpha = clamp(getTimeAlive(), 0f, 1f)
+        alpha = 1f-sq(1f-alpha)
+        if(alpha < 1f/255f) return
+        shader.v1(shader.alpha, alpha)
+        for (index in 0 until meshInfo.length) {
+
+            val buffer = meshInfo.getBuffer(index)
+            meshInfo.bindPath(data, index)
+
+            if (!hasCorrectTransform) {
+                updateTransform(data, shader)
+                hasCorrectTransform = true
+            }
+
+            GFX.check()
+
+            if (data.renderLines) {
+                buffer.bind(shader)
+                drawLines(buffer.drawLength)
+                GFX.check()
+            } else {
+                buffer.draw(shader)
+                GFX.check()
+            }
+
+            data.chunkTriangles += buffer.drawLength
+            data.chunkBuffers++
+        }
+    }
+
+    fun updateTransform(data: RenderData, shader: SolidShader) {
+        val delta = coordinates.set(data.delta).mul(CS.toDouble()).sub(data.cameraPosition)
+        val dx = delta.x.toFloat()
+        val dy = delta.y.toFloat()
+        val dz = delta.z.toFloat()
+        shader.v3(shader.offset, dx, dy, dz)
     }
 
     val entities = HashSet<Entity>()
     var stage = 0
 
     var isFinished = false
-        private set(value) {
-            field = value
-        }
+        private set
 
     fun finish() {
         isFinished = true
@@ -276,40 +278,10 @@ class Chunk(val dimension: Dimension, val coordinates: Vector3j) {
 
     var rigidBody: RigidBody? = null
 
-    var lastRendered = 0L
+    var lastRendered = GFX.gameTime
 
     fun drop(info: BlockInfo) {
         entities += ItemStackEntity(ItemStack(info.state), dimension, info.coordinates.getBlockCenter())
-    }
-
-    fun Vector4f(x: Double, y: Double, z: Double, w: Double) =
-        Vector4f(x.toFloat(), y.toFloat(), z.toFloat(), w.toFloat())
-
-    fun Vector4f(x: Double, y: Double, z: Double) = Vector4f(x.toFloat(), y.toFloat(), z.toFloat(), 1f)
-
-    fun isVisible(matrix: Matrix4f, position: Vector3d): Boolean {
-
-        checkIsGFXThread()
-
-        fun getPoint(x: Int, y: Int, z: Int, i: Int): Vector4f? {
-            val vec = vs[i]
-            vec.set(x - position.x, y - position.y, z - position.z, 1.0)
-            matrix.transformProject(vec, vec)
-            return if (vec.x in -1f..1f && vec.y in -1f..1f && vec.z in -1f..1f) null
-            else vec
-        }
-
-        getPoint(x0, y0, z0, 0) ?: return true
-        getPoint(x0, y0, z1, 1) ?: return true
-        getPoint(x0, y1, z0, 2) ?: return true
-        getPoint(x0, y1, z1, 3) ?: return true
-        getPoint(x1, y0, z0, 4) ?: return true
-        getPoint(x1, y0, z1, 5) ?: return true
-        getPoint(x1, y1, z0, 6) ?: return true
-        getPoint(x1, y1, z1, 7) ?: return true
-
-        return Clipping.isRoughlyVisible(vs)
-
     }
 
     fun isSolid(index: Int) = content.isSolid(index)
@@ -325,13 +297,16 @@ class Chunk(val dimension: Dimension, val coordinates: Vector3j) {
         val vs = Array(8) { Vector4f() }.toList()
 
         const val FIRST_SOLID = 0
+        const val uFIRST_SOLID: UByte = 0u
+
         const val FIRST_TRANS = 128
+        const val uFIRST_TRANS: UByte = 128u
 
         const val AIR = 254
-        const val OTHER = 255
+        const val uAIR: UByte = 254u
 
-        val uAIR = AIR.toUByte()
-        val uOTHER = OTHER.toUByte()
+        const val OTHER = 255
+        const val uOTHER: UByte = 255u
 
         const val SOLID_SIZE = FIRST_TRANS - FIRST_SOLID
         const val TRANS_SIZE = AIR - FIRST_TRANS
@@ -388,6 +363,8 @@ class Chunk(val dimension: Dimension, val coordinates: Vector3j) {
         fun getVec3d(i: Int) = Vector3d(getXd(i), getYd(i), getZd(i))
 
         val half = Vector3d(0.5)
+
+        private val LOGGER = LogManager.getLogger(Chunk::class)
 
     }
 

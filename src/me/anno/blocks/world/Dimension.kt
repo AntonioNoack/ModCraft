@@ -8,33 +8,33 @@ import me.anno.blocks.chunk.Chunk
 import me.anno.blocks.chunk.Chunk.Companion.CS
 import me.anno.blocks.chunk.Chunk.Companion.CSBits
 import me.anno.blocks.chunk.Chunk.Companion.CSm1
+import me.anno.blocks.chunk.lighting.BakeLight
 import me.anno.blocks.entity.player.Player
 import me.anno.blocks.rendering.RenderData
 import me.anno.blocks.rendering.RenderPass
 import me.anno.blocks.rendering.ShaderLib2.skyShader
+import me.anno.blocks.rendering.SkyShader
+import me.anno.blocks.rendering.SolidShader
 import me.anno.blocks.utils.floorToJnt
 import me.anno.blocks.utils.struct.Vector3j
 import me.anno.blocks.world.generator.Generator
+import me.anno.blocks.world.generator.RemoteGenerator
 import me.anno.gpu.GFX
-import me.anno.gpu.shader.Shader
 import me.anno.objects.models.CubemapModel
 import me.anno.utils.Color.toVecRGBA
 import me.anno.utils.ColorParsing.parseColor
-import me.anno.utils.LOGGER
 import me.anno.utils.Maths.sq
 import me.anno.utils.Sleep.sleepShortly
-import me.anno.utils.types.Vectors.toVec3f
-import org.joml.AABBd
-import org.joml.Vector3d
-import org.joml.Vector3f
-import org.joml.Vector3i
-import java.util.concurrent.atomic.AtomicInteger
-import kotlin.concurrent.thread
+import me.anno.utils.hpc.ProcessingGroup
+import org.joml.*
 import kotlin.math.*
 
 class Dimension(val world: World, val id: String, val generator: Generator) {
 
     val chunks = HashMap<Vector3j, Chunk>()
+
+    val generatorWorker = ProcessingGroup("Generator-Terrain", 0.3f).apply { start() }
+    val lightingWorker = ProcessingGroup("Generator-Light", 0.3f).apply { start() }
 
     val skyColor = parseColor("#bde0ec")!!.toVecRGBA()
 
@@ -47,6 +47,7 @@ class Dimension(val world: World, val id: String, val generator: Generator) {
     private fun getOrPut(coordinates: Vector3j, callback: (Chunk) -> Unit): Chunk {
         return synchronized(chunks) {
             chunks.getOrPut(coordinates) {
+                // if(coordinates.y > 9) throw IllegalArgumentException("Don't fly that high!")
                 Chunk(this, coordinates).apply(callback)
             }
         }
@@ -69,17 +70,25 @@ class Dimension(val world: World, val id: String, val generator: Generator) {
         )
     }
 
-    fun getChunkAt(coordinates: Vector3d, wantFinished: Boolean): Chunk? {
-        return getChunk(Vector3d(coordinates).div(CS.toDouble()).floorToJnt(), wantFinished)
+    fun getChunkAt(c: Vector3d, wantFinished: Boolean): Chunk? {
+        return getChunk(Vector3d(c).div(CS.toDouble()).floorToJnt(), wantFinished)
     }
 
     fun getChunk(c: Vector3i, wantFinished: Boolean): Chunk? = getChunk(Vector3j(c), wantFinished)
 
-    fun getChunk(coordinates: Vector3j, wantFinished: Boolean): Chunk? {
-        return if (hasBlocksBelowZero || coordinates.y >= 0) {
-            val chunk = getOrPut(coordinates) {
-                thread { generator.getFinishedChunk(coordinates) }
+    fun getChunk(c: Vector3j, wantFinished: Boolean): Chunk? {
+        return if (hasBlocksBelowZero || c.y >= 0) {
+            val chunk = getOrPut(c) {
+                // a worker could do this...
+                generatorWorker.start()
+                generatorWorker += {
+                    val chunk = generator.getFinishedChunk(c)!!
+                    if(generator !is RemoteGenerator && BakeLight.EnableLighting){
+                        lightingWorker += { chunk.calculateLightMap() }
+                    }
+                }
             }
+            if(wantFinished && !chunk.isFinished) GFX.checkIsNotGFXThread()
             while (wantFinished && !chunk.isFinished) sleepShortly()
             chunk
         } else null
@@ -115,6 +124,10 @@ class Dimension(val world: World, val id: String, val generator: Generator) {
             }
         }
         return list
+    }
+
+    fun getLightAt(x: Int, y: Int, z: Int): Short {
+        return getChunkAt(x, y, z, true)?.getLight(x, y, z) ?: 0
     }
 
     fun getBlockInfo(position: Vector3j, wantFinished: Boolean = true) =
@@ -177,8 +190,9 @@ class Dimension(val world: World, val id: String, val generator: Generator) {
     val sunLight = Vector3f(0.5f)
     val baseLight = Vector3f(0.2f + 0.5f)
 
-    val chunksByDistance = ChunksByDistance(5)
+    val chunksByDistance = ChunksByDistance(10)
     val centerChunkCoordinates = Vector3i()
+    val positionWithOffset = Vector2d()
 
     fun prepareChunks(data: RenderData, player: Player) {
 
@@ -188,6 +202,10 @@ class Dimension(val world: World, val id: String, val generator: Generator) {
         centerChunkCoordinates.y = (position.y / CS).roundToInt()
         centerChunkCoordinates.z = (position.z / CS).roundToInt()
 
+        positionWithOffset.set(position.x, position.z)
+        positionWithOffset.div(32.0)
+        positionWithOffset.sub(0.5,0.5)
+
         val chunkCoordinates = Vector3i()
 
         var updates = 1
@@ -196,22 +214,32 @@ class Dimension(val world: World, val id: String, val generator: Generator) {
         chunksByDistance.update(centerChunkCoordinates)
         chunksByDistance.resetForRendering()
 
-        for ((index, delta) in chunksByDistance.values.withIndex()) {
+        val maxDistanceSq = sq(chunksByDistance.maxDistance)
+
+        val values = chunksByDistance.values
+        for (index in values.indices) {
+            val delta = values[index]
             chunkCoordinates.set(centerChunkCoordinates).add(delta)
             if (hasBlocksBelowZero || chunkCoordinates.y >= 0) {
-                var chunk: Chunk? = chunksByDistance.getChunk(index)
-                if (chunk == null) chunk = synchronized(chunks) { chunks[Vector3j(chunkCoordinates)] }
-                if (chunk == null) {
-                    updates--
-                    if (updates >= 0) {
-                        chunk = getChunk(chunkCoordinates, false)
+                val distanceSq = positionWithOffset.distanceSquared(
+                    chunkCoordinates.x.toDouble(),
+                    chunkCoordinates.z.toDouble()
+                )
+                if(distanceSq < maxDistanceSq){
+                    var chunk: Chunk? = chunksByDistance.getChunk(index)
+                    if (chunk == null) chunk = synchronized(chunks) { chunks[Vector3j(chunkCoordinates)] }
+                    if (chunk == null) {
+                        updates--
+                        if (updates >= 0) {
+                            chunk = getChunk(chunkCoordinates, false)
+                        }
                     }
-                }
-                if (chunk != null) {
-                    chunksByDistance.setChunk(index, chunk)
-                    chunk.lastRendered = time
-                    if (chunk.shouldBeDrawn(data)) {
-                        chunksByDistance.pushForRendering(chunk)
+                    if (chunk != null) {
+                        chunksByDistance.setChunk(index, chunk)
+                        chunk.lastRendered = time
+                        if (chunk.shouldBeDrawn(data)) {
+                            chunksByDistance.pushForRendering(chunk)
+                        }
                     }
                 }
             }
@@ -236,27 +264,38 @@ class Dimension(val world: World, val id: String, val generator: Generator) {
         }
     }
 
-    fun prepareShader(data: RenderData, shader: Shader) {
+    fun prepareShader(data: RenderData, shader: SkyShader) {
 
         shader.use()
 
         val tintColor = if (isUnderWater) waterColor else if (isInsideRocks) rockColor else white
-        shader.v4(
-            "tint",
-            tintColor.x,
-            tintColor.y,
-            tintColor.z,
-            if (isUnderWater) 0.5f else if (isInsideRocks) 0.75f else 0f
-        )
+        val tintAlpha = if (isUnderWater) 0.5f else if (isInsideRocks) 0.75f else 0f
+        shader.v4(shader.tint, tintColor, tintAlpha)
 
-        shader.v3("sunDir", sunDir)
-        shader.v3("sunLight", sunLight)
-        shader.v3("baseLight", baseLight)
-        shader.v1("fogFactor", if (isUnderWater || isInsideRocks) 1f / 20f else 1 / 100f)
+        shader.v3(shader.sunDir, sunDir)
+        shader.v3(shader.sunLight, sunLight)
+        shader.v3(shader.baseLight, baseLight)
 
-        shader.v3("topColor", 0f / 255f, 41f / 255f, 178f / 255f)
-        shader.v3("midColor", 176 / 255f, 200 / 255f, 206f / 25f)
-        shader.v3("bottomColor", 255f / 255f, 249f / 255f, 199f / 255f)
+        shader.v3(shader.topColor, 0f / 255f, 41f / 255f, 178f / 255f)
+        shader.v3(shader.midColor, 176 / 255f, 200 / 255f, 206f / 25f)
+        shader.v3(shader.bottomColor, 255f / 255f, 249f / 255f, 199f / 255f)
+
+    }
+
+    fun prepareShader(data: RenderData, shader: SolidShader) {
+
+        shader.use()
+
+        val tintColor = if (isUnderWater) waterColor else if (isInsideRocks) rockColor else white
+        val tintAlpha = if (isUnderWater) 0.5f else if (isInsideRocks) 0.75f else 0f
+        shader.v4(shader.tint, tintColor, tintAlpha)
+
+        shader.v3(shader.sunDir, sunDir)
+        shader.v3(shader.sunLight, sunLight)
+        shader.v3(shader.baseLight, baseLight)
+        shader.v1(shader.fogFactor, if (isUnderWater || isInsideRocks) 1f / 20f else 1 / 100f)
+
+        shader.m4x4(shader.matrix, data.matrix)
 
     }
 
@@ -274,19 +313,20 @@ class Dimension(val world: World, val id: String, val generator: Generator) {
                 abs(chunk.lastRendered - time) > timeout &&
                         chunk.center.distanceSquared(data.cameraPosition) > maxDistanceSq
             }.toList()
-            for (entry in shallBeRemoved) {
-                chunks.remove(entry.coordinates)
+            for (chunk in shallBeRemoved) {
+                chunks.remove(chunk.coordinates)
             }
             shallBeRemoved.forEach { chunk ->
-                LOGGER.info("Destroyed ${chunk.coordinates}")
+                // if(chunks.containsKey(chunk.coordinates)) throw IllegalStateException()
+                // LOGGER.info("Destroyed ${chunk.coordinates}")
                 chunk.destroy()
             }
         }
     }
 
-    val waterColor = parseColor("#9ee5ff")!!.toVecRGBA().toVec3f().mul(0.5f)
-    val white = Vector3f(1f)
-    val rockColor = Vector3f(0f)
+    val waterColor = 0x9ee5ff
+    val white = -1
+    val rockColor = 0
 
     fun drawSky(data: RenderData) {
 
@@ -329,17 +369,6 @@ class Dimension(val world: World, val id: String, val generator: Generator) {
 
         GFX.check()
 
-    }
-
-    private val requestSlots = AtomicInteger(16)
-    fun requestSlot() {
-        while (requestSlots.getAndDecrement() <= 0) {
-            requestSlots.incrementAndGet()
-            Thread.sleep(1)
-        }
-    }
-    fun unlockRequestSlot() {
-        requestSlots.incrementAndGet()
     }
 
     // todo ray tracer always go one step

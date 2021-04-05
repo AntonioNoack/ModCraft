@@ -86,8 +86,8 @@ class CommandManager(val world: World) {
             val message = arguments.subList(1, arguments.size).joinToString(" ")
             val target = getPlayer(server, arguments[0])
             val packet = MessagePacket("[/msg] ${client.name}: $message")
-            thread { target.send(packet) }
-            thread { client.send(packet) }
+            target.sendAsync(packet)
+            client.sendAsync(packet)
             null
         }
         register(

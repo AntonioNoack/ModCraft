@@ -27,8 +27,8 @@ class LayeredChunkContent(val layers: Array<BlockState>) : ChunkContent() {
 
     override fun optimize(): ChunkContent {
         val first = layers[0]
-        for(y in 1 until CS){
-            if(layers[y] != first) return this
+        for (y in 1 until CS) {
+            if (layers[y] != first) return this
         }
         return SimplestChunkContent(first)
     }
@@ -81,18 +81,34 @@ class LayeredChunkContent(val layers: Array<BlockState>) : ChunkContent() {
     }
 
     override fun writeInternally(output: DataOutputStream) {
-        for(y in 0 until CS){
+        for (y in 0 until CS) {
             output.writeBlockState(layers[y])
         }
     }
 
     override fun readInternally(input: DataInputStream, registry: BlockRegistry): ChunkContent {
-        for(y in 0 until CS){
+        for (y in 0 until CS) {
             val newState = input.readBlockState(registry)
             layers[y] = newState
             isSolid[y] = newState.isSolid
         }
         return this
+    }
+
+    override fun isCompletelySolid(): Boolean {
+        for (y in 0 until CS) {
+            if (!isSolid[y]) return false
+        }
+        return true
+    }
+
+    override fun isClosedSolid(): Boolean = isClosedSolid()
+
+    override fun containsLights(): Boolean {
+        for (y in 0 until CS) {
+            if (layers[y].isLight) return true
+        }
+        return false
     }
 
 

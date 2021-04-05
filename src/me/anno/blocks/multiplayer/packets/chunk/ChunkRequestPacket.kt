@@ -18,6 +18,7 @@ import org.joml.Vector3d
 import org.joml.Vector3i
 import java.io.DataInputStream
 import java.io.DataOutputStream
+import kotlin.concurrent.thread
 
 class ChunkRequestPacket(
     val coordinates: Vector3i,
@@ -51,7 +52,10 @@ class ChunkRequestPacket(
                 val chunk = dimension.getChunk(coordinates, true)
                 if (chunk != null) {
                     if (!chunk.isFinished) throw RuntimeException("Chunk was unfinished")
-                    client.send(ChunkDataPacket(chunk))
+                    thread(name = "Waiting for lightmap") {
+                        val packet = ChunkDataPacket(chunk)
+                        client.sendAsync(packet)
+                    }
                 } else client.send(ChunkDeniedPacket(this))
             }
         } else {

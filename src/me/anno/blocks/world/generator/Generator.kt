@@ -4,12 +4,19 @@ import me.anno.blocks.chunk.Chunk
 import me.anno.blocks.utils.struct.Vector3j
 import me.anno.blocks.world.Dimension
 import me.anno.gpu.GFX.checkIsNotGFXThread
+import me.anno.utils.LOGGER
+import org.apache.logging.log4j.LogManager
 
 abstract class Generator(val stages: Int, val hasBlocksBelowZero: Boolean) {
 
     lateinit var dimension: Dimension
 
-    fun getFinishedChunk(coordinates: Vector3j) = getChunk(coordinates, stages)
+    fun getFinishedChunk(coordinates: Vector3j): Chunk? {
+        if(this !is RemoteGenerator) LOGGER.info("Requested $coordinates")
+        val chunk = getChunk(coordinates, stages)
+        if(this !is RemoteGenerator) LOGGER.info("Finished $coordinates")
+        return chunk
+    }
 
     private val lockedChunks = HashSet<Chunk>()
     private fun lock(chunk: Chunk, run: () -> Unit) {
@@ -55,5 +62,9 @@ abstract class Generator(val stages: Int, val hasBlocksBelowZero: Boolean) {
     abstract fun generate(chunk: Chunk, stage: Int)
 
     // todo calculate lights
+
+    companion object {
+        private val LOGGER = LogManager.getLogger(Generator::class)
+    }
 
 }

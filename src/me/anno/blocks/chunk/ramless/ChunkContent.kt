@@ -7,6 +7,7 @@ import me.anno.blocks.block.base.ErrorBlock
 import me.anno.blocks.chunk.Chunk
 import me.anno.blocks.chunk.Chunk.Companion.CS
 import me.anno.blocks.chunk.Chunk.Companion.CS2
+import me.anno.blocks.chunk.Chunk.Companion.getIndex
 import me.anno.blocks.registry.BlockRegistry
 import java.io.DataInputStream
 import java.io.DataOutputStream
@@ -29,6 +30,12 @@ abstract class ChunkContent {
     abstract fun getBlockNullable(index: Int): Block?
 
     abstract fun isSolid(index: Int): Boolean
+
+    abstract fun isCompletelySolid(): Boolean
+
+    abstract fun isClosedSolid(): Boolean
+
+    abstract fun containsLights(): Boolean
 
     abstract fun setBlockInternally(index: Int, newState: BlockState): ChunkContent
 
@@ -65,6 +72,8 @@ abstract class ChunkContent {
     open fun fill(newState: BlockState): ChunkContent {
         return SimplestChunkContent(newState)
     }
+
+    fun getBlock(x: Int, y: Int, z: Int) = getBlock(getIndex(x, y, z))
 
     fun getBlock(index: Int): Block = getBlockNullable(index) ?: ErrorBlock
 

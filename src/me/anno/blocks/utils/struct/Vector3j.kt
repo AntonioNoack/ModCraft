@@ -6,7 +6,11 @@ import org.joml.Vector3i
 
 class Vector3j(val x: Int, val y: Int, val z: Int) {
 
+    constructor() : this(0, 0, 0)
+    constructor(i: Int) : this(i, i, i)
     constructor(v: Vector3i) : this(v.x, v.y, v.z)
+    constructor(v: Vector3i, dx: Int, dy: Int, dz: Int) : this(v.x + dx, v.y + dy, v.z + dz)
+    constructor(v: Vector3j, dx: Int, dy: Int, dz: Int) : this(v.x + dx, v.y + dy, v.z + dz)
 
     override fun toString(): String {
         return "$x $y $z"
@@ -19,6 +23,8 @@ class Vector3j(val x: Int, val y: Int, val z: Int) {
     override fun hashCode(): Int {
         return (x.hashCode() + y.hashCode() * 31) * 31 + z.hashCode()
     }
+
+    operator fun plus(v: Vector3j) = Vector3j(x + v.x, y + v.y, z + v.z)
 
     fun set(dst: Vector3d): Vector3d {
         dst.x = x.toDouble()

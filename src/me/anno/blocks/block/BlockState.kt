@@ -3,6 +3,7 @@ package me.anno.blocks.block
 data class BlockState(val block: Block, val state: String?){
 
     val isSolid get() = block.isSolid
+    val isLight get() = block.isLight
 
     override fun hashCode(): Int {
         return block.hashCode() + 31 * state.hashCode()

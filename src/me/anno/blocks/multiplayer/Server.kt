@@ -30,18 +30,22 @@ class Server(val port: Int = defaultPort) {
 
     var shallStop = false
 
-    fun stop(){
+    fun stop() {
         shallStop = true
     }
 
+    private val threadName = "ServerWaiting"
+
     fun start(async: Boolean) {
         if (async) {
-            thread { start(false) }
+            thread(name = threadName) {
+                start(false)
+            }
             return
         }
         val server = ServerSocket(port)
         val thread = Thread.currentThread()
-        thread.name = "ServerWaiting"
+        thread.name = threadName
         LOGGER.info("Started Server")
         while (!server.isClosed && !shallStop) {
             try {
@@ -75,10 +79,11 @@ class Server(val port: Int = defaultPort) {
         }
         try {
             server.close()
-        } catch (e: Exception){}
+        } catch (e: Exception) {
+        }
     }
 
-    fun gameTick(){
+    fun gameTick() {
         // todo calculate game ticks...
         // todo unload no longer required chunks
         // todo update chunks around players to stay loaded...
@@ -134,20 +139,23 @@ class Server(val port: Int = defaultPort) {
         return null
     }
 
-    fun spawnPlayer(client: ServerSideClient){
+    fun spawnPlayer(client: ServerSideClient) {
         val defaultDimension = world.getDimension("default")!!
         val player = client.entity
-        client.send(TeleportPacket(
-            TeleportPacket.DimensionData(
-                defaultDimension.id,
-                defaultDimension.hasBlocksBelowZero
-        ), player.position, player.rotation))
+        client.send(
+            TeleportPacket(
+                TeleportPacket.DimensionData(
+                    defaultDimension.id,
+                    defaultDimension.hasBlocksBelowZero
+                ), player.position, player.rotation
+            )
+        )
     }
 
     fun sendAll(packet: Packet) {
         synchronized(players) {
             for (player in players) {
-                thread { player.send(packet) }
+                player.sendAsync(packet)
             }
         }
     }

@@ -81,4 +81,10 @@ class SimplestChunkContent(var state: BlockState) : ChunkContent() {
         } else this
     }
 
+    override fun isCompletelySolid(): Boolean = isSolid
+
+    override fun isClosedSolid(): Boolean = isSolid
+
+    override fun containsLights(): Boolean = state.isLight
+
 }

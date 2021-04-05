@@ -47,7 +47,7 @@ object Physics {
         canHitFluids: Boolean,
         entities: List<Entity>?,
         debug: Boolean = false,
-        getBlock: (x: Int, y: Int, z: Int) -> BlockState
+        getBlock: (x: Int, y: Int, z: Int) -> BlockState?
     ): RaycastHit? {
 
         direction.normalize()
@@ -77,8 +77,9 @@ object Physics {
         val minY = if (hasBlocksBelowZero) Int.MIN_VALUE else 0
 
         fun checkHit(c: Vector3i): RaycastHit? {
-            if(debug) LOGGER.debug("Checking ${c.x} ${c.y} ${c.z}")
-            val block = getBlock(c.x, c.y, c.z)
+            if (debug) LOGGER.debug("Checking ${c.x} ${c.y} ${c.z}")
+            val block = getBlock(c.x, c.y, c.z) ?:
+                return UnloadedChunkHit(distance, position)
             val result = if (block != Air) {
                 val physics = block.block.physical
                 when (physics.type) {
@@ -105,7 +106,6 @@ object Physics {
         }
 
 
-
         // acceptable inaccuracy
         val epsilon = 1e-4f
         val maxSteps = 1000
@@ -125,18 +125,18 @@ object Physics {
             distance = minLength
             position.set(direction).mul(distance).add(origin)
             positionI.set(floor(position.x).toInt(), minY, floor(position.z).toInt())
-            if(debug) LOGGER.debug("Jumped to $distance")
+            if (debug) LOGGER.debug("Jumped to $distance")
         } else {
             position.set(origin)
             positionI.x = floor(position.x).toInt()
             positionI.y = floor(position.y).toInt()
             positionI.z = floor(position.z).toInt()
-            if(debug) LOGGER.debug("Set start position")
+            if (debug) LOGGER.debug("Set start position")
         }
 
         while (steps++ < maxSteps) {
 
-            if(!hasBlocksBelowZero && positionI.y < minY){
+            if (!hasBlocksBelowZero && positionI.y < minY) {
                 break
             }
 
@@ -155,18 +155,18 @@ object Physics {
             val sy = (if (dirY > 0f) 1f - fractY else -fractY) / dirY
             val sz = (if (dirZ > 0f) 1f - fractZ else -fractZ) / dirZ
 
-            if(debug) LOGGER.debug("${sx.f3()} ${sy.f3()} ${sz.f3()}")
+            if (debug) LOGGER.debug("${sx.f3()} ${sy.f3()} ${sz.f3()}")
 
             distance = StrictMath.min(sx, StrictMath.min(sy, sz))
-            if(distance >= bestDistance) break
+            if (distance >= bestDistance) break
 
-            when(distance){
+            when (distance) {
                 sx -> positionI.x += dx
                 sy -> positionI.y += dy
                 sz -> positionI.z += dz
             }
 
-            if(debug) LOGGER.debug("$distance: $position")
+            if (debug) LOGGER.debug("$distance: $position")
 
         }
 

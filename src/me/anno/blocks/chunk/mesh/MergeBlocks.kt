@@ -1,4 +1,4 @@
-package me.anno.blocks.chunk
+package me.anno.blocks.chunk.mesh
 
 import me.anno.blocks.block.BlockState
 import me.anno.blocks.chunk.Chunk.Companion.CS

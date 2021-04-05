@@ -1,4 +1,4 @@
-package me.anno.blocks.chunk
+package me.anno.blocks.chunk.mesh
 
 import me.anno.blocks.block.BlockSide
 import me.anno.blocks.block.BlockState
@@ -6,6 +6,7 @@ import me.anno.blocks.block.base.Air
 import me.anno.blocks.block.visual.BlockVisuals
 import me.anno.blocks.block.visual.MaterialType
 import me.anno.blocks.block.visual.Texture
+import me.anno.blocks.chunk.Chunk
 import me.anno.blocks.chunk.Chunk.Companion.CS
 import me.anno.blocks.chunk.Chunk.Companion.CS3
 import me.anno.blocks.chunk.Chunk.Companion.CSm1
@@ -14,13 +15,10 @@ import me.anno.blocks.chunk.Chunk.Companion.CSx2m1
 import me.anno.blocks.chunk.Chunk.Companion.dx
 import me.anno.blocks.chunk.Chunk.Companion.dy
 import me.anno.blocks.chunk.Chunk.Companion.dz
-import me.anno.blocks.chunk.mesh.MeshInfo
-import me.anno.blocks.rendering.BlockBuffer
 import me.anno.blocks.rendering.ShaderLib2
 import me.anno.gpu.buffer.StaticBuffer
 import me.anno.utils.LOGGER
 import org.joml.Matrix4x3f
-import org.joml.Vector4f
 
 object BakeMesh {
 
@@ -34,6 +32,7 @@ object BakeMesh {
 
     fun bakeMesh(
         side: BlockSide,
+        chunk: Chunk,
         neighborChunk: Chunk?,
         blockStates: Array<BlockState>,
         materialType: MaterialType,
@@ -80,7 +79,8 @@ object BakeMesh {
         MergeBlocks.mergeBlocks(mergedBlocks, blockStates, visuals.mapBooleanArray { it.supportsRepetitions })
 
         val vertexCounts = HashMap<String, Int>()
-        for ((index, state) in blockStates.withIndex()) {
+        for (index in blockStates.indices) {
+            val state = blockStates[index]
             if (state !== Air) {
                 val visual = state.block.visuals
                 val texture = textures[index]
@@ -102,12 +102,12 @@ object BakeMesh {
         // todo delete unnecessary
         oldMeshes?.destroy()
 
-        if(vertexCounts.isEmpty()) return null
-
-        val light = Vector4f(1f)
+        if (vertexCounts.isEmpty()) return null
 
         val meshes2 = HashMap<String, StaticBuffer>()
 
+        val dimension = chunk.dimension
+        val coo = chunk.innerCorner
         val matrix = Matrix4x3f()
         for ((path, vertexCount) in vertexCounts) {
             if (vertexCount > 0) {
@@ -129,14 +129,28 @@ object BakeMesh {
                                     val sy = size.shr(CSx2Bits * 2) and CSx2m1
                                     val sz = size and CSx2m1
                                     visual.createMesh(sx, sy, sz, side) { coordinates ->
-                                        BlockBuffer(buffer, matrix, coordinates.uv0, coordinates.uv1) { light }
+                                        BlockBuffer(buffer, matrix, coordinates.uv0, coordinates.uv1) { dx, dy, dz ->
+                                            if (dx in 0 until CS && dy in 0 until CS && dz in 0 until CS) {
+                                                // use chunk
+                                                chunk.getLight(dx, dy, dz)
+                                            } else {
+                                                // use dimension
+                                                // we could check, whether it's the neighbor chunk to speed up the process
+                                                val x2 = coo.x + dx
+                                                val y2 = coo.y + dy
+                                                val z2 = coo.z + dz
+                                                if (neighborChunk?.culling?.contains(x2, y2, z2) == true) {
+                                                    neighborChunk.getLight(x2, y2, z2)
+                                                } else dimension.getLightAt(coo.x + dx, coo.y + dy, coo.z + dz)
+                                            }
+                                        }
                                     }
                                 }
                             }
                         }
                     }
                 }
-                if(buffer.nioBuffer!!.position() > 0){
+                if (buffer.nioBuffer!!.position() > 0) {
                     meshes2[path] = buffer
                 } else LOGGER.warn("Though I'd need a mesh, but I didn't -> wrong vertex count")
             }
@@ -213,7 +227,7 @@ object BakeMesh {
         for (y in 0 until CS) {
             for (z in 0 until CS) {
                 val index = Chunk.getIndex(x, y, z)
-                if(isSolid[index] && neighborChunk.isSolid(index+sideOffset0)){
+                if (isSolid[index] && neighborChunk.isSolid(index + sideOffset0)) {
                     textures[index] = null
                 }
             }
@@ -231,7 +245,7 @@ object BakeMesh {
         for (x in 0 until CS) {
             for (z in 0 until CS) {
                 val index = Chunk.getIndex(x, y, z)
-                if(isSolid[index] && neighborChunk.isSolid(index+sideOffset0)){
+                if (isSolid[index] && neighborChunk.isSolid(index + sideOffset0)) {
                     textures[index] = null
                 }
             }
@@ -249,7 +263,7 @@ object BakeMesh {
         for (x in 0 until CS) {
             for (y in 0 until CS) {
                 val index = Chunk.getIndex(x, y, z)
-                if(isSolid[index] && neighborChunk.isSolid(index+sideOffset0)){
+                if (isSolid[index] && neighborChunk.isSolid(index + sideOffset0)) {
                     textures[index] = null
                 }
             }

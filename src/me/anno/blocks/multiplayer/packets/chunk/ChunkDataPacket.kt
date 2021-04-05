@@ -1,6 +1,7 @@
 package me.anno.blocks.multiplayer.packets.chunk
 
 import me.anno.blocks.chunk.Chunk
+import me.anno.blocks.chunk.lighting.BakeLight.EnableLighting
 import me.anno.blocks.multiplayer.Client
 import me.anno.blocks.multiplayer.ExclusiveSender
 import me.anno.blocks.multiplayer.SendRecvUtils.readName8
@@ -9,6 +10,7 @@ import me.anno.blocks.multiplayer.SendRecvUtils.writeName8
 import me.anno.blocks.multiplayer.SendRecvUtils.writeVec
 import me.anno.blocks.multiplayer.packets.Packet
 import me.anno.blocks.multiplayer.packets.PacketIDs.CHUNK_DATA
+import me.anno.utils.Sleep
 import org.apache.logging.log4j.LogManager
 import org.joml.Vector3i
 import java.io.ByteArrayOutputStream
@@ -31,8 +33,17 @@ class ChunkDataPacket(
             synchronized(chunk) {
                 val buffer = ByteArrayOutputStream(4096)
                 val dos = DataOutputStream(buffer)
+                LOGGER.info("Sending ${chunk.coordinates}")
                 chunk.optimizeMaybe()
                 chunk.content.write(dos)
+                if (EnableLighting) {
+                    LOGGER.info("Sent main content ${chunk.coordinates}")
+                    chunk.dimension.lightingWorker += { chunk.calculateLightMap() }
+                    while (!chunk.lightMap.isValid) Sleep.sleepShortly()
+                    LOGGER.info("Started writing ${chunk.coordinates}")
+                    chunk.lightMap.write(dos)
+                }
+                LOGGER.info("Sent ${chunk.coordinates}")
                 dos.flush()
                 return buffer.toByteArray()
             }
@@ -73,8 +84,9 @@ class ChunkDataPacket(
         }
         val dis = DataInputStream(data.inputStream())
         chunk.content = chunk.content.read(dis, chunk.dimension.world.registry)
+        if (EnableLighting) chunk.lightMap.read(dis)
+        LOGGER.info("Got chunk $coordinates")
         chunk.finish()
-        dimension.unlockRequestSlot()
     }
 
 }

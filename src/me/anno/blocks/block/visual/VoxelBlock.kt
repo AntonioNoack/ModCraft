@@ -1,7 +1,7 @@
 package me.anno.blocks.block.visual
 
 import me.anno.blocks.block.BlockSide
-import me.anno.blocks.rendering.BlockBuffer
+import me.anno.blocks.chunk.mesh.BlockBuffer
 
 class VoxelBlock(
     voxels: IntArray, // N³ colors

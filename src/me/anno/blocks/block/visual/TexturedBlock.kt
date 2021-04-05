@@ -1,10 +1,10 @@
 package me.anno.blocks.block.visual
 
 import me.anno.blocks.block.BlockSide
-import me.anno.blocks.rendering.BlockBuffer
-import me.anno.blocks.rendering.BlockBuffer.Companion.VERTEX_COUNT_QUAD
+import me.anno.blocks.chunk.mesh.BlockBuffer
+import me.anno.blocks.chunk.mesh.BlockBuffer.Companion.VERTEX_COUNT_QUAD
 
-class TexturedBlock(
+open class TexturedBlock(
     val nx: TextureCoordinates,
     val px: TextureCoordinates,
     val ny: TextureCoordinates,

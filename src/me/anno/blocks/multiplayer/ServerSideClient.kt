@@ -5,11 +5,13 @@ import me.anno.blocks.multiplayer.packets.Packet
 import me.anno.blocks.multiplayer.packets.utils.ErrorPacket
 import me.anno.blocks.world.Dimension
 import me.anno.gpu.GFX
+import me.anno.utils.hpc.ProcessingQueue
 import org.apache.logging.log4j.LogManager
 import org.joml.Vector3d
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.net.Socket
+import java.util.concurrent.ForkJoinWorkerThread
 import kotlin.concurrent.thread
 
 open class ServerSideClient(
@@ -61,11 +63,12 @@ open class ServerSideClient(
         }
     }
 
+    val packetWorker = ProcessingQueue("PacketWorker")
+        .apply { start() }
+
     fun sendAsync(packet: Packet){
         if (isClosed) return
-        thread {
-            send(packet)
-        }
+        packetWorker += { send(packet) }
     }
 
     override fun toString(): String = name

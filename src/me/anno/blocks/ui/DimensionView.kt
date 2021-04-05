@@ -4,9 +4,10 @@ import me.anno.blocks.ClientInstance
 import me.anno.blocks.block.BlockInfo
 import me.anno.blocks.block.BlockState
 import me.anno.blocks.block.base.Air
-import me.anno.blocks.block.base.Stone
+import me.anno.blocks.block.base.AirBlock
 import me.anno.blocks.block.visual.MaterialType
 import me.anno.blocks.entity.player.Player
+import me.anno.blocks.item.ItemStack
 import me.anno.blocks.multiplayer.Client
 import me.anno.blocks.multiplayer.packets.block.BlockChangePacket
 import me.anno.blocks.multiplayer.packets.motion.ClientMovePacket
@@ -16,6 +17,7 @@ import me.anno.blocks.physics.RaycastHit
 import me.anno.blocks.rendering.DebugCubes.drawDebugCube
 import me.anno.blocks.rendering.RenderData
 import me.anno.blocks.rendering.RenderPass
+import me.anno.blocks.rendering.SelectVisuals
 import me.anno.blocks.rendering.ShaderLib2.skyShader
 import me.anno.blocks.rendering.ShaderLib2.solidShader
 import me.anno.blocks.utils.struct.Vector3j
@@ -43,10 +45,9 @@ import me.anno.utils.files.Files.formatFileSize
 import org.apache.logging.log4j.LogManager
 import org.joml.Matrix4f
 import org.joml.Vector3f
-import org.joml.Vector4f
 import org.lwjgl.opengl.GL11.*
-import kotlin.concurrent.thread
 import kotlin.math.abs
+import kotlin.math.roundToInt
 import kotlin.system.exitProcess
 
 class DimensionView(
@@ -104,12 +105,12 @@ class DimensionView(
             lastPositionUpdate = time
             val player = getPlayer() ?: return
             val client = getClient() ?: return
-            thread { client.send(ClientMovePacket(player)) }
+            client.sendAsync(ClientMovePacket(player))
         }
     }
 
     override fun onMouseMoved(x: Float, y: Float, dx: Float, dy: Float) {
-        if(isInFocus2){
+        if (isInFocus2) {
             val player = getPlayer() ?: return
             val f = 3f / h
             val trapRadius = GFX.trapMouseRadius
@@ -135,7 +136,7 @@ class DimensionView(
         val player = getPlayer()
 
         if (player == null || dimension == null) {
-            println("$player/$dimension")
+            // LOGGER.info("$player/$dimension")
             showLoadingScreen()
         } else {
             try {
@@ -152,29 +153,35 @@ class DimensionView(
         GFXx2D.drawText(0, 0, font, "Loading...", -1, black, -1)
     }
 
-    var hovered: RaycastHit? = null
+    private var hovered: RaycastHit? = null
+    private val p0 = Vector3f()
+    private val p1 = Vector3f()
     private fun findHoveredBlock(dimension: Dimension, player: Player, inverse: Matrix4f): BlockInfo? {
 
-        val p0 = inverse.transformProject(Vector3f())
-        val p1 = inverse.transformProject(Vector3f(0f, 0f, 1f))
+        val p0 = inverse.transformProject(p0.set(0f, 0f, 0f))
+        val p1 = inverse.transformProject(p1.set(0f, 0f, 1f))
         val dir = p1.sub(p0).normalize()
         player.mouseDirection.set(dir)
 
         val hit = Physics.raytrace(
-            data.cameraPosition, dir, 100f,
-            dimension.hasBlocksBelowZero, true, null
+            data.cameraPosition, dir, 10f,
+            dimension.hasBlocksBelowZero, false, null
         ) { x, y, z ->
-            dimension.getBlock(x, y, z, true)
+            val chunk = dimension.getChunkAt(x, y, z, false)
+            if (chunk != null && chunk.isFinished) {
+                chunk.getBlockState(x, y, z)
+            } else null
         }
         hovered = hit
 
-        if (hit is BlockHit) return dimension.getBlockInfo(hit.blockPosition)
+        if (hit is BlockHit) return dimension.getBlockInfo(hit.blockPosition, false)
         return null
 
     }
 
     fun clear() {
         Frame.bind()
+        glClearColor(0f, 0f, 0f, 1f)
         glClear(GL_DEPTH_BUFFER_BIT or GL_COLOR_BUFFER_BIT)
     }
 
@@ -220,25 +227,23 @@ class DimensionView(
         matrix.invert(data.inverse)
 
         data.cameraPosition.set(player.position)
+        data.cameraRotation.set(player.headRotX, player.rotationY, 0f)
         dimension.findSpecialRenderingConditions(data)
 
         findHoveredBlock(dimension, player, data.inverse)
 
         // val t0 = Clock()
         dimension.prepareChunks(data, player)
-        dimension.prepareShader(data, solidShader)
         dimension.unloadChunks(data)
         // t0.stop("preDraw")
 
         val showStacking = Input.isKeyDown('o')
         data.renderLines = Input.isKeyDown('l')
 
-        val skyColor = if (showStacking) Vector4f() else dimension.skyColor
-        glClearColor(skyColor.x, skyColor.y, skyColor.z, 1f)
-
         val blendMode = if (showStacking) BlendMode.ADD else null
+        val samples = if (Input.isKeyDown('u')) 8 else 1
 
-        val colors = FBStack["Solid", w, h, 1, false]
+        val colors = FBStack["Solid", w, h, samples, false]
 
         val enableDistanceFog = !Input.isKeyDown('i') && !showStacking
         if (enableDistanceFog) {
@@ -257,6 +262,11 @@ class DimensionView(
             copy(colors, false)
 
         }
+
+        val solidShader = solidShader
+        solidShader.use()
+        solidShader.v1("showLight", if (Input.isKeyDown('j')) 1f else 0f)
+        dimension.prepareShader(data, solidShader)
 
         Frame(colors) {
 
@@ -277,7 +287,7 @@ class DimensionView(
 
                 GFX.check()
 
-                drawDebug()
+                // drawDebug()
 
                 GFX.check()
 
@@ -305,6 +315,11 @@ class DimensionView(
                 dimension.draw(data, transPassComplex)
             }
 
+            BlendDepth(null, true) {
+                draw3DCursor(data, player)
+                drawItemBar(data, player)
+            }
+
         }
 
         // t0.stop("transparency")
@@ -329,12 +344,89 @@ class DimensionView(
 
     }
 
+    fun draw3DCursor(data: RenderData, player: Player) {
+
+        val hit = hovered as? BlockHit ?: return
+        if (hit.distance < 1.0) return
+
+        val block = SelectVisuals
+        val shader = solidShader
+
+        shader.v1(shader.alpha, 1f)
+        shader.v4(shader.tint, 0f)
+
+        val scale = 17f / 16f
+
+        val cam = data.cameraPosition
+        val blo = hit.blockPosition
+        shader.v3(shader.offset, (blo.x - cam.x).toFloat(), (blo.y - cam.y).toFloat(), (blo.z - cam.z).toFloat())
+
+        data.lastTexture = null
+
+        val matrix = data.matrix
+        matrix.next {
+            matrix.scale(1f / scale)
+            shader.m4x4(shader.matrix, matrix)
+            block.draw(data, shader)
+        }
+
+    }
+
+    fun drawItemBar(data: RenderData, player: Player) {
+
+        val inventory = player.inventory
+        val ratio = h.toFloat() / w
+        val bottom = -1f
+        val range = inventory.sizeX * 1f
+
+        val matrix = data.matrix
+        matrix.identity()
+        matrix.ortho(-range, range, bottom * ratio, (bottom + 2f * range) * ratio, -1f, 1000f)
+
+        val shader = solidShader
+        shader.use()
+        data.lastTexture = null
+
+        shader.v1(shader.alpha, 1f)
+        shader.v4(shader.tint, 0f)
+
+        for (i in 0 until inventory.sizeX) {
+
+            val x = i - (inventory.sizeX - 1) * 0.5f
+            val slot = i + (inventory.sizeY - 1) * inventory.sizeX
+            val block = inventory.slots[slot]
+
+            // draw block
+            matrix.next {
+
+                matrix.translate(x, 0f, 0f)
+                matrix.rotateX(0.3f)
+                matrix.rotateY(1.57f / 2f)
+
+                val scale = if (player.selectedSlot == i) 0.6f else 0.5f
+                matrix.scale(scale)
+
+                shader.m4x4(shader.matrix, matrix)
+
+            }
+
+            shader.v3(shader.offset, -0.5f)
+            block.state.block.apply {
+                draw(data, shader)
+            }
+
+            // todo draw number
+            // todo draw outline
+
+        }
+    }
+
     private fun drawCrosshair() {
         val color = 0x777777 or black
         val x0 = x + w / 2
         val y0 = y + h / 2
-        val sx = 2
-        val sy = 10
+        val sx = 4
+        val sy = 20
         GFXx2D.drawRect(x0 - sx / 2, y0 - sy / 2, sx, sy, color)
         GFXx2D.drawRect(x0 - sy / 2, y0 - sx / 2, sy, sx, color)
     }
@@ -342,36 +434,61 @@ class DimensionView(
     val font = Font("Consolas", 24f, false, false)
 
     fun setBlock(position: Vector3j, newBlock: BlockState, oldBlock: BlockState) {
-        getClient()?.apply { thread { send(BlockChangePacket(position, newBlock, oldBlock)) } }
+        getClient()?.apply { sendAsync(BlockChangePacket(position, newBlock, oldBlock)) }
         getDimension()?.setBlock(position, true, newBlock)
     }
 
-    override fun onMouseClicked(x: Float, y: Float, button: MouseButton, long: Boolean) {
+    private var remainingScrollSum = 0f
+    override fun onMouseWheel(x: Float, y: Float, dx: Float, dy: Float) {
+        if (!isInFocus2) return
+
+        val player = getPlayer() ?: return
+        remainingScrollSum += dy
+        val yi = remainingScrollSum.roundToInt()
+        if (yi != 0) {
+            remainingScrollSum -= yi
+            player.scrollSlot(yi)
+        }
+
+    }
+
+    override fun onMouseDown(x: Float, y: Float, button: MouseButton) {
 
         GFX.trapMousePanel = this
         instance.console.hide()
 
-        val hover = hovered
-        if (hover != null && isInFocus2) {
+        val hovered = hovered
+        if (hovered != null && isInFocus2) {
             when {
                 button.isLeft -> {
                     // todo mine / hit something
-                    when (hover) {
+                    when (hovered) {
                         is BlockHit -> {
-                            setBlock(hover.blockPosition, Air, hover.block)
+                            setBlock(hovered.blockPosition, Air, hovered.block)
                         }
                     }
                 }
                 button.isMiddle -> {
                     // copy position?...
+                    val player = getPlayer() ?: return
+                    val blockHit = hovered as? BlockHit ?: return
+                    val inventory = player.inventory
+                    val slot = player.selectedSlot + player.hotBarStartIndex
+                    inventory.slots[slot] = ItemStack(blockHit.block)
                 }
                 button.isRight -> {
                     // todo set the block / open something
-                    when (hover) {
+                    when (hovered) {
                         is BlockHit -> {
                             // todo get the previous block...
                             // getClient()?.send(BlockChangePacket())
-                            setBlock(hover.previousPosition, Stone, hover.previousBlock)
+                            val player = getPlayer() ?: return
+                            val inventory = player.inventory
+                            val slot = player.selectedSlot + player.hotBarStartIndex
+                            val state = inventory.slots[slot].state
+                            if (state.block != AirBlock) {
+                                setBlock(hovered.previousPosition, state, hovered.previousBlock)
+                            }
                         }
                     }
                 }
@@ -385,7 +502,7 @@ class DimensionView(
     }
 
     override fun onCharTyped(x: Float, y: Float, key: Int) {
-        when (key.toChar()) {
+        when (val char = key.toChar()) {
             't', 'T' -> {
                 // open console
                 val console = instance.console
@@ -399,6 +516,7 @@ class DimensionView(
                             "Textures: ${Texture2D.allocated.formatFileSize()}"
                 )
             }
+            in '1'..'9' -> getPlayer()?.selectSlot(char - '1')
             else -> super.onCharTyped(x, y, key)
         }
     }
